@@ -3,7 +3,7 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE  = "rajesh4113/cust-app"
+        DOCKER_IMAGE = "rajesh4113/cust-app"
         SONAR_PROJECT = "cust-flask"
     }
 
@@ -18,22 +18,20 @@ pipeline {
         stage('Verify Git Tag') {
             steps {
                 script {
-                    // Get tags pointing at current HEAD
-                    def output = bat(
-                        script: 'git tag --points-at HEAD',
-                        returnStdout: true
-                    ).trim()
+                    // Ensure Jenkins pulls all remote tags
+                    bat """
+                        git fetch --tags
+                    """
 
-                    def lines = output.readLines()
-                    def tag = lines ? lines[-1].trim() : ""
+                    // Detect the release tag
+                    def tagCheck = bat(script: 'git describe --tags --exact-match', returnStdout: true).trim()
 
-                    if (!tag || !tag.startsWith("v")) {
-                        error "Not a tagged build. CI/CD only runs for tagged releases."
+                    if (!tagCheck.startsWith("v")) {
+                        error "❌ Not a tagged build. CI/CD only runs for tagged releases."
                     }
 
-                    // Save the tag into env so we can reuse it
-                    env.RELEASE_TAG = tag
-                    echo "Running pipeline for release tag: ${tag}"
+                    env.RELEASE_TAG = tagCheck
+                    echo "📌 Running pipeline for release tag: ${RELEASE_TAG}"
                 }
             }
         }
@@ -41,16 +39,14 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    // Jenkins tool name: SonarScanner
                     def scannerHome = tool 'SonarScanner'
 
-                    // Jenkins SonarQube server name: SonarScanner
                     withSonarQubeEnv('SonarScanner') {
                         bat """
                             "${scannerHome}\\bin\\sonar-scanner.bat" ^
-                              -Dsonar.projectKey=${SONAR_PROJECT} ^
-                              -Dsonar.sources=. ^
-                              -Dsonar.host.url=http://localhost:9000
+                             -Dsonar.projectKey=${SONAR_PROJECT} ^
+                             -Dsonar.sources=. ^
+                             -Dsonar.projectVersion=${RELEASE_TAG}
                         """
                     }
                 }
@@ -59,34 +55,36 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                bat """
-                    docker build -t ${DOCKER_IMAGE}:${env.RELEASE_TAG} .
-                """
+                script {
+                    bat """
+                        docker build -t ${DOCKER_IMAGE}:${RELEASE_TAG} .
+                    """
+                }
             }
         }
 
         stage('Trivy Scan') {
             steps {
-                bat """
-                    trivy image --severity HIGH,CRITICAL --exit-code 0 ${DOCKER_IMAGE}:${env.RELEASE_TAG}
-                """
+                script {
+                    bat """
+                        trivy image --severity CRITICAL ${DOCKER_IMAGE}:${RELEASE_TAG}
+                    """
+                }
             }
         }
 
         stage('Push to DockerHub') {
             steps {
                 script {
-                    withCredentials([
-                        usernamePassword(
-                            credentialsId: 'docker-cred',
-                            usernameVariable: 'DOCKER_USER',
-                            passwordVariable: 'DOCKER_PASS'
-                        )
-                    ]) {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'docker-cred',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+
                         bat """
-                            echo Logging into DockerHub...
-                            echo %DOCKER_PASS% | docker login -u %DOCKER_USER% --password-stdin
-                            docker push ${DOCKER_IMAGE}:${env.RELEASE_TAG}
+                            docker login -u %DOCKER_USER% -p %DOCKER_PASS%
+                            docker push ${DOCKER_IMAGE}:${RELEASE_TAG}
                         """
                     }
                 }
@@ -95,21 +93,24 @@ pipeline {
 
         stage('Deploy to Minikube') {
             steps {
-                bat """
-                    minikube image load ${DOCKER_IMAGE}:${env.RELEASE_TAG}
-                    kubectl apply -f k8s-deployment.yaml
-                    kubectl apply -f k8s-service.yaml
-                """
+                script {
+                    bat """
+                        minikube image rm ${DOCKER_IMAGE}:${RELEASE_TAG} || exit 0
+                        minikube image load ${DOCKER_IMAGE}:${RELEASE_TAG}
+                        kubectl apply -f k8s-deployment.yaml
+                        kubectl apply -f k8s-service.yaml
+                    """
+                }
             }
         }
     }
 
     post {
         success {
-            echo "Build and deployment successful."
+            echo "🎉 CI/CD Pipeline Success — deployed version: ${RELEASE_TAG}"
         }
         failure {
-            echo "CI/CD pipeline failed. Check logs."
+            echo "❌ CI/CD pipeline failed — check logs."
         }
     }
 }

@@ -1,21 +1,16 @@
 pipeline {
+
     agent any
 
     environment {
-        IMAGE_NAME     = 'rajesh4113/cust-jenkins-docker-build'
-        HOST_PORT      = '8082'
-        CONTAINER_PORT = '8080'
-    }
-
-    options {
-        disableConcurrentBuilds()
+        DOCKER_IMAGE = "rajesh4113/cust-app"
+        SONAR_PROJECT = "cust-flask"
     }
 
     stages {
 
-        stage('Checkout') {
+        stage('Checkout SCM') {
             steps {
-                // Checkout the same repo that contains this Jenkinsfile
                 checkout scm
             }
         }
@@ -23,19 +18,13 @@ pipeline {
         stage('Verify Git Tag') {
             steps {
                 script {
-                    def tag = ''
-                    try {
-                        // This will fail if the current commit does NOT have an exact tag
-                        tag = bat(
-                            script: 'git describe --tags --exact-match',
-                            returnStdout: true
-                        ).trim()
-                    } catch (Exception e) {
-                        error "No Git tag found on this commit. Create and push a tag (e.g. v1.0.0) to run this pipeline."
+                    def tagCheck = bat(script: 'git describe --tags --exact-match', returnStdout: true).trim()
+
+                    if (!tagCheck.startsWith("v")) {
+                        error "❌ Not a tagged build. CI/CD only runs for tagged releases."
                     }
 
-                    env.IMAGE_TAG = tag
-                    echo "Running release pipeline for tag: ${env.IMAGE_TAG}"
+                    echo "Running pipeline for release tag: ${tagCheck}"
                 }
             }
         }
@@ -43,17 +32,13 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    // Tool name must match Global Tool Configuration
                     def scannerHome = tool 'SonarScanner'
 
-                    // 'LocalSonar' must match SonarQube server name in Manage Jenkins → System
-                    withSonarQubeEnv('LocalSonar') {
+                    withSonarQubeEnv('SonarScanner') {  // Must match the server name in Jenkins config
                         bat """
                             "${scannerHome}\\bin\\sonar-scanner.bat" ^
-                              -Dsonar.projectKey=cust-flask ^
-                              -Dsonar.sources=. ^
-                              -Dsonar.host.url=%SONAR_HOST_URL% ^
-                              -Dsonar.login=%SONAR_AUTH_TOKEN%
+                              -Dsonar.projectKey=${SONAR_PROJECT} ^
+                              -Dsonar.sources=.
                         """
                     }
                 }
@@ -62,64 +47,59 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                echo "Building Docker image: ${IMAGE_NAME}:${env.IMAGE_TAG}"
-                bat """
-                    docker build -t ${IMAGE_NAME}:${env.IMAGE_TAG} .
-                """
-            }
-        }
-
-        stage('Trivy Scan') {
-            steps {
-                echo "Scanning Docker image with Trivy..."
-                bat """
-                    trivy image --severity HIGH,CRITICAL --exit-code 0 ${IMAGE_NAME}:${env.IMAGE_TAG}
-                """
-            }
-        }
-
-        stage('Push to DockerHub') {
-            steps {
-                echo "Pushing image to DockerHub..."
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-creds',
-                    usernameVariable: 'DOCKER_USER',
-                    passwordVariable: 'DOCKER_PASS'
-                )]) {
+                script {
                     bat """
-                        echo %DOCKER_PASS% | docker login -u "%DOCKER_USER%" --password-stdin
-                        docker push ${IMAGE_NAME}:${env.IMAGE_TAG}
+                        docker build -t ${DOCKER_IMAGE}:${BUILD_TAG} .
                     """
                 }
             }
         }
 
-        stage('Deploy Container') {
+        stage('Trivy Scan') {
             steps {
-                echo "Deploying container from image ${IMAGE_NAME}:${env.IMAGE_TAG}..."
-                bat """
-                    docker rm -f cust-app 2>nul || echo No existing container
-                    docker run -d --name cust-app -p ${HOST_PORT}:${CONTAINER_PORT} ${IMAGE_NAME}:${env.IMAGE_TAG}
-                """
+                script {
+                    bat """
+                        trivy image --severity CRITICAL ${DOCKER_IMAGE}:${BUILD_TAG}
+                    """
+                }
             }
         }
 
-        stage('Cleanup') {
+        stage('Push to DockerHub') {
             steps {
-                echo "Cleaning up unused Docker images..."
-                bat """
-                    docker image prune -af || echo Cleanup finished
-                """
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'docker-cred',
+                     usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+
+                        bat """
+                            docker login -u %DOCKER_USER% -p %DOCKER_PASS%
+                            docker push ${DOCKER_IMAGE}:${BUILD_TAG}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Minikube') {
+            steps {
+                script {
+                    bat """
+                        minikube image rm ${DOCKER_IMAGE}:${BUILD_TAG} || exit 0
+                        minikube image load ${DOCKER_IMAGE}:${BUILD_TAG}
+                        kubectl apply -f k8s-deployment.yaml
+                        kubectl apply -f k8s-service.yaml
+                    """
+                }
             }
         }
     }
 
     post {
         success {
-            echo "CI/CD pipeline completed successfully for tag ${env.IMAGE_TAG}."
+            echo "Build and deployment successful."
         }
         failure {
-            echo "CI/CD pipeline failed. Please check the stage logs."
+            echo "CI/CD pipeline failed. Check logs."
         }
     }
 }

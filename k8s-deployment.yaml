@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cust-app-deployment
+  labels:
+    app: cust-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cust-app
+  template:
+    metadata:
+      labels:
+        app: cust-app
+    spec:
+      containers:
+        - name: cust-app
+          image: rajesh4113/cust-app
+          ports:
+            - containerPort: 8080

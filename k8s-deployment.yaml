@@ -2,8 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cust-app
-  labels:
-    app: cust-app
 spec:
   replicas: 1
   selector:
@@ -15,8 +13,7 @@ spec:
         app: cust-app
     spec:
       containers:
-        - name: cust-app
-          image: rajesh4113/cust-app:latest
-          imagePullPolicy: Never
-          ports:
-            - containerPort: 8080
+      - name: cust-app   # must match Jenkins set-image target
+        image: rajesh4113/cust-app:latest
+        ports:
+        - containerPort: 5000

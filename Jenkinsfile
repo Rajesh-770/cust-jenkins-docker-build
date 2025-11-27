@@ -3,8 +3,9 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = "rajesh4113/cust-app"
-        // RELEASE_TAG will be set dynamically after verifying Git tag
+        DOCKER_IMAGE  = "rajesh4113/cust-app"
+        SONAR_PROJECT = "cust-flask"      // must match SonarQube project key
+        // RELEASE_TAG will be set dynamically from git tag
     }
 
     stages {
@@ -20,43 +21,48 @@ pipeline {
         stage('Verify Git Tag') {
             steps {
                 script {
-                    // Ensure all remote tags are available
+                    // Ensure all tags are available
                     bat 'git fetch --tags --force'
 
-                    // Windows-safe way: only print the tag(s) that point at HEAD
+                    // Get ONLY the tag(s) pointing at HEAD (Windows-safe)
                     def tagOutput = bat(
                         script: '@echo off && for /f "usebackq delims=" %%i in (`git tag --points-at HEAD`) do @echo %%i',
                         returnStdout: true
                     ).trim()
 
                     if (!tagOutput) {
-                        error "❌ No tag found on this commit. CI/CD runs only on tagged releases."
+                        error "No tag found on this commit. CI/CD runs only on tagged releases."
                     }
 
-                    // If multiple tags exist, use the first one
+                    // If multiple tags, pick the first one
                     def tagCheck = tagOutput.split()[0]
 
                     if (!tagCheck.startsWith("v")) {
-                        error "❌ Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.12."
+                        error "Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.12."
                     }
 
                     env.RELEASE_TAG = tagCheck
-                    echo "✔ Running pipeline for release tag: ${env.RELEASE_TAG}"
+                    echo "Running pipeline for release tag: ${env.RELEASE_TAG}"
                 }
             }
         }
 
         /* --- 3. SonarQube static analysis --- */
-        // Uses sonar-project.properties in the repo (with sonar.login token, host URL, etc.)
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    def scannerHome = tool 'SonarScanner'  // Jenkins > Manage Jenkins > Tools > SonarQube Scanner
+                    def scannerHome = tool 'SonarScanner'   // Jenkins tool name (Manage Jenkins → Tools)
 
-                    withSonarQubeEnv('SonarScanner') {     // Jenkins > Manage Jenkins > System > SonarQube servers
+                    withCredentials([
+                        string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')
+                    ]) {
                         bat """
                             "${scannerHome}\\bin\\sonar-scanner.bat" ^
-                              -Dsonar.projectVersion=${env.RELEASE_TAG}
+                              -Dsonar.host.url=http://localhost:9000 ^
+                              -Dsonar.projectKey=${SONAR_PROJECT} ^
+                              -Dsonar.sources=. ^
+                              -Dsonar.projectVersion=${env.RELEASE_TAG} ^
+                              -Dsonar.login=%SONAR_TOKEN%
                         """
                     }
                 }
@@ -85,13 +91,13 @@ pipeline {
             }
         }
 
-        /* --- 6. Push to DockerHub --- */
+        /* --- 6. Push image to DockerHub --- */
         stage('Push to DockerHub') {
             steps {
                 script {
                     withCredentials([
                         usernamePassword(
-                            credentialsId: 'dockerhub-creds',   // your Docker Hub creds in Jenkins
+                            credentialsId: 'dockerhub-creds',
                             usernameVariable: 'DOCKER_USER',
                             passwordVariable: 'DOCKER_PASS'
                         )
@@ -111,15 +117,21 @@ pipeline {
             steps {
                 script {
                     bat """
-                        rem Load the tagged image into Minikube
+                        echo ==== Minikube status ====
+                        minikube status || minikube start --driver=docker
+
+                        echo ==== Load image into Minikube ====
                         minikube image load ${DOCKER_IMAGE}:${env.RELEASE_TAG}
 
-                        rem Use minikube's kubectl so Jenkins doesn't depend on host kubeconfig
-                        minikube kubectl -- apply -f k8s-deployment.yaml
-                        minikube kubectl -- apply -f k8s-service.yaml
+                        echo ==== Apply Kubernetes manifests (using minikube kubectl) ====
+                        minikube kubectl -- apply -f k8s-deployment.yaml --validate=false
+                        minikube kubectl -- apply -f k8s-service.yaml --validate=false
 
-                        rem Make sure deployment uses the exact tagged image
-                        minikube kubectl -- set image deployment/cust-app cust-app=${DOCKER_IMAGE}:${env.RELEASE_TAG} --record
+                        echo ==== Update deployment image ====
+                        minikube kubectl -- set image deployment/cust-app cust-app=${DOCKER_IMAGE}:${env.RELEASE_TAG}
+
+                        echo ==== Rollout status ====
+                        minikube kubectl -- rollout status deployment/cust-app --timeout=60s
                     """
                 }
             }
@@ -128,10 +140,10 @@ pipeline {
 
     post {
         success {
-            echo "🎉 CI/CD Pipeline SUCCESS — deployed version: ${env.RELEASE_TAG}"
+            echo "CI/CD pipeline SUCCESS — deployed version: ${env.RELEASE_TAG}"
         }
         failure {
-            echo "❌ CI/CD pipeline FAILED — check stage logs."
+            echo "CI/CD pipeline FAILED — check stage logs."
         }
     }
 }

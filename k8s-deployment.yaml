@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: cust-app
-          image: rajesh4113/cust-app:latest   # real tag set by kubectl set image
-          imagePullPolicy: IfNotPresent
+          image: rajesh4113/cust-app:latest
+          imagePullPolicy: Never
           ports:
             - containerPort: 8080

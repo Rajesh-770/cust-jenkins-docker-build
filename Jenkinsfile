@@ -4,8 +4,8 @@ pipeline {
 
     environment {
         DOCKER_IMAGE  = "rajesh4113/cust-app"
-        SONAR_PROJECT = "cust-flask"
-        // RELEASE_TAG will be set dynamically in Verify Git Tag stage
+        SONAR_PROJECT = "cust-flask"      // must match SonarQube project key
+        // RELEASE_TAG will be set dynamically from git tag
     }
 
     stages {
@@ -21,28 +21,28 @@ pipeline {
         stage('Verify Git Tag') {
             steps {
                 script {
-                    // Make sure all tags are available
+                    // Ensure all tags are available
                     bat 'git fetch --tags --force'
 
-                    // Returns ONLY the tag(s) pointing at HEAD (one per line)
+                    // Get ONLY the tag(s) pointing at HEAD (Windows-safe)
                     def tagOutput = bat(
                         script: '@echo off && for /f "usebackq delims=" %%i in (`git tag --points-at HEAD`) do @echo %%i',
                         returnStdout: true
                     ).trim()
 
                     if (!tagOutput) {
-                        error "❌ No tag found on this commit. CI/CD runs only on tagged releases."
+                        error "No tag found on this commit. CI/CD runs only on tagged releases."
                     }
 
                     // If multiple tags, pick the first one
                     def tagCheck = tagOutput.split()[0]
 
                     if (!tagCheck.startsWith("v")) {
-                        error "❌ Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.10."
+                        error "Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.12."
                     }
 
                     env.RELEASE_TAG = tagCheck
-                    echo "✔ Running pipeline for release tag: ${env.RELEASE_TAG}"
+                    echo "Running pipeline for release tag: ${env.RELEASE_TAG}"
                 }
             }
         }
@@ -51,22 +51,19 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    def scannerHome = tool 'SonarScanner'   // Jenkins global tool name
+                    def scannerHome = tool 'SonarScanner'   // Jenkins tool name (Manage Jenkins → Tools)
 
-                    // 'SonarScanner' here is the SonarQube server name from Jenkins config
-                    withSonarQubeEnv('SonarScanner') {
-
-                        // sonar-token = Secret text credential with your squ_xxx token
-                        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                            bat """
-                                "${scannerHome}\\bin\\sonar-scanner.bat" ^
-                                  -Dsonar.host.url=%SONAR_HOST_URL% ^
-                                  -Dsonar.projectKey=${SONAR_PROJECT} ^
-                                  -Dsonar.sources=. ^
-                                  -Dsonar.projectVersion=${env.RELEASE_TAG} ^
-                                  -Dsonar.login=%SONAR_TOKEN%
-                            """
-                        }
+                    withCredentials([
+                        string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')
+                    ]) {
+                        bat """
+                            "${scannerHome}\\bin\\sonar-scanner.bat" ^
+                              -Dsonar.host.url=http://localhost:9000 ^
+                              -Dsonar.projectKey=${SONAR_PROJECT} ^
+                              -Dsonar.sources=. ^
+                              -Dsonar.projectVersion=${env.RELEASE_TAG} ^
+                              -Dsonar.login=%SONAR_TOKEN%
+                        """
                     }
                 }
             }
@@ -94,13 +91,13 @@ pipeline {
             }
         }
 
-        /* --- 6. Push to DockerHub --- */
+        /* --- 6. Push image to DockerHub --- */
         stage('Push to DockerHub') {
             steps {
                 script {
                     withCredentials([
                         usernamePassword(
-                            credentialsId: 'dockerhub-creds',   // Jenkins DockerHub credential ID
+                            credentialsId: 'dockerhub-creds',
                             usernameVariable: 'DOCKER_USER',
                             passwordVariable: 'DOCKER_PASS'
                         )
@@ -137,10 +134,10 @@ pipeline {
 
     post {
         success {
-            echo "🎉 CI/CD Pipeline SUCCESS — deployed version: ${env.RELEASE_TAG}"
+            echo "CI/CD pipeline SUCCESS — deployed version: ${env.RELEASE_TAG}"
         }
         failure {
-            echo "❌ CI/CD pipeline FAILED — check stage logs."
+            echo "CI/CD pipeline FAILED — check stage logs."
         }
     }
 }

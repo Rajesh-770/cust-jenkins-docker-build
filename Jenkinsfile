@@ -5,7 +5,7 @@ pipeline {
     environment {
         DOCKER_IMAGE  = "rajesh4113/cust-app"
         SONAR_PROJECT = "cust-flask"
-        // RELEASE_TAG will be set in Verify Git Tag stage
+        // RELEASE_TAG is set in "Verify Git Tag"
     }
 
     stages {
@@ -24,7 +24,7 @@ pipeline {
                     // Make sure we have all remote tags
                     bat 'git fetch --tags --force'
 
-                    // Get tag that points at current commit (no failure if no tag)
+                    // Get tags that point at current commit
                     def tags = bat(
                         script: 'git tag --points-at HEAD',
                         returnStdout: true
@@ -34,7 +34,7 @@ pipeline {
                         error "❌ No tag found on this commit. CI/CD runs only on tagged releases."
                     }
 
-                    // If multiple tags exist, pick the first one
+                    // If multiple tags exist, pick the first
                     def tagCheck = tags.split()[0]
 
                     if (!tagCheck.startsWith("v")) {
@@ -51,8 +51,8 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    def scannerHome = tool 'SonarScanner'      // Jenkins global tool name
-                    withSonarQubeEnv('SonarScanner') {          // Jenkins Sonar server name
+                    def scannerHome = tool 'SonarScanner'        // Jenkins tool name
+                    withSonarQubeEnv('SonarScanner') {            // Jenkins Sonar server name
                         bat """
                             "${scannerHome}\\bin\\sonar-scanner.bat" ^
                               -Dsonar.projectKey=${SONAR_PROJECT} ^
@@ -75,7 +75,7 @@ pipeline {
             }
         }
 
-        /* --- 5. Trivy image scan --- */
+        /* --- 5. Trivy image scan (fails on CRITICAL) --- */
         stage('Trivy Scan') {
             steps {
                 script {
@@ -92,7 +92,7 @@ pipeline {
                 script {
                     withCredentials([
                         usernamePassword(
-                            credentialsId: 'dockerhub-creds',
+                            credentialsId: 'dockerhub-creds',   // MUST match Jenkins credential ID
                             usernameVariable: 'DOCKER_USER',
                             passwordVariable: 'DOCKER_PASS'
                         )

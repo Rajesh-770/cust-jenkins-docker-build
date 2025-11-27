@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: cust-app
-          image: rajesh4113/cust-app:latest    # Jenkins will change this to :v1.0.x
-          imagePullPolicy: Never               # use image already loaded into Minikube
+          image: rajesh4113/cust-app:latest   # real tag set by kubectl set image
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

@@ -5,11 +5,11 @@ metadata:
   labels:
     app: cust-app
 spec:
-  type: NodePort
   selector:
     app: cust-app
+  type: NodePort
   ports:
     - name: http
       port: 8080
       targetPort: 8080
-      nodePort: 30080
+      nodePort: 30080   # minikube service will open this

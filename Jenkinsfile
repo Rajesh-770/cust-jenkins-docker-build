@@ -5,7 +5,7 @@ pipeline {
     environment {
         DOCKER_IMAGE  = "rajesh4113/cust-app"
         SONAR_PROJECT = "cust-flask"
-        // RELEASE_TAG is set in "Verify Git Tag"
+        // RELEASE_TAG will be set dynamically
     }
 
     stages {
@@ -21,21 +21,21 @@ pipeline {
         stage('Verify Git Tag') {
             steps {
                 script {
-                    // Make sure we have all remote tags
+                    // Make sure all tags are available
                     bat 'git fetch --tags --force'
 
-                    // Get tags that point at current commit
-                    def tags = bat(
-                        script: 'git tag --points-at HEAD',
+                    // This returns ONLY the tag(s) pointing at HEAD, not the prompt
+                    def tagOutput = bat(
+                        script: '@echo off && for /f "usebackq delims=" %%i in (`git tag --points-at HEAD`) do @echo %%i',
                         returnStdout: true
                     ).trim()
 
-                    if (!tags) {
+                    if (!tagOutput) {
                         error "❌ No tag found on this commit. CI/CD runs only on tagged releases."
                     }
 
-                    // If multiple tags exist, pick the first
-                    def tagCheck = tags.split()[0]
+                    // If multiple tags, pick the first one
+                    def tagCheck = tagOutput.split()[0]
 
                     if (!tagCheck.startsWith("v")) {
                         error "❌ Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.7."
@@ -51,8 +51,8 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    def scannerHome = tool 'SonarScanner'        // Jenkins tool name
-                    withSonarQubeEnv('SonarScanner') {            // Jenkins Sonar server name
+                    def scannerHome = tool 'SonarScanner'      // Jenkins global tool name
+                    withSonarQubeEnv('SonarScanner') {          // Jenkins Sonar server name
                         bat """
                             "${scannerHome}\\bin\\sonar-scanner.bat" ^
                               -Dsonar.projectKey=${SONAR_PROJECT} ^
@@ -75,7 +75,7 @@ pipeline {
             }
         }
 
-        /* --- 5. Trivy image scan (fails on CRITICAL) --- */
+        /* --- 5. Trivy image scan --- */
         stage('Trivy Scan') {
             steps {
                 script {
@@ -92,7 +92,7 @@ pipeline {
                 script {
                     withCredentials([
                         usernamePassword(
-                            credentialsId: 'dockerhub-creds',   // MUST match Jenkins credential ID
+                            credentialsId: 'dockerhub-creds',
                             usernameVariable: 'DOCKER_USER',
                             passwordVariable: 'DOCKER_PASS'
                         )

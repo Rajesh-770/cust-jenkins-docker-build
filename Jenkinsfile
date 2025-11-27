@@ -5,7 +5,7 @@ pipeline {
     environment {
         DOCKER_IMAGE  = "rajesh4113/cust-app"
         SONAR_PROJECT = "cust-flask"
-        // RELEASE_TAG will be set dynamically
+        // RELEASE_TAG will be set dynamically in Verify Git Tag stage
     }
 
     stages {
@@ -24,7 +24,7 @@ pipeline {
                     // Make sure all tags are available
                     bat 'git fetch --tags --force'
 
-                    // This returns ONLY the tag(s) pointing at HEAD, not the prompt
+                    // Returns ONLY the tag(s) pointing at HEAD (one per line)
                     def tagOutput = bat(
                         script: '@echo off && for /f "usebackq delims=" %%i in (`git tag --points-at HEAD`) do @echo %%i',
                         returnStdout: true
@@ -38,7 +38,7 @@ pipeline {
                     def tagCheck = tagOutput.split()[0]
 
                     if (!tagCheck.startsWith("v")) {
-                        error "❌ Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.7."
+                        error "❌ Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.10."
                     }
 
                     env.RELEASE_TAG = tagCheck
@@ -51,14 +51,22 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    def scannerHome = tool 'SonarScanner'      // Jenkins global tool name
-                    withSonarQubeEnv('SonarScanner') {          // Jenkins Sonar server name
-                        bat """
-                            "${scannerHome}\\bin\\sonar-scanner.bat" ^
-                              -Dsonar.projectKey=${SONAR_PROJECT} ^
-                              -Dsonar.sources=. ^
-                              -Dsonar.projectVersion=${env.RELEASE_TAG}
-                        """
+                    def scannerHome = tool 'SonarScanner'   // Jenkins global tool name
+
+                    // 'SonarScanner' here is the SonarQube server name from Jenkins config
+                    withSonarQubeEnv('SonarScanner') {
+
+                        // sonar-token = Secret text credential with your squ_xxx token
+                        withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                            bat """
+                                "${scannerHome}\\bin\\sonar-scanner.bat" ^
+                                  -Dsonar.host.url=%SONAR_HOST_URL% ^
+                                  -Dsonar.projectKey=${SONAR_PROJECT} ^
+                                  -Dsonar.sources=. ^
+                                  -Dsonar.projectVersion=${env.RELEASE_TAG} ^
+                                  -Dsonar.login=%SONAR_TOKEN%
+                            """
+                        }
                     }
                 }
             }
@@ -92,7 +100,7 @@ pipeline {
                 script {
                     withCredentials([
                         usernamePassword(
-                            credentialsId: 'dockerhub-creds',
+                            credentialsId: 'dockerhub-creds',   // Jenkins DockerHub credential ID
                             usernameVariable: 'DOCKER_USER',
                             passwordVariable: 'DOCKER_PASS'
                         )

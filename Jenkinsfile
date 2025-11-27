@@ -5,50 +5,47 @@ pipeline {
     environment {
         DOCKER_IMAGE  = "rajesh4113/cust-app"
         SONAR_PROJECT = "cust-flask"
-        KUBE_NAMESPACE = "default"
+        // RELEASE_TAG will be set in Verify Git Tag stage
     }
 
     stages {
 
+        /* --- 1. Checkout from GitHub (done automatically, but keep it) --- */
         stage('Checkout SCM') {
             steps {
                 checkout scm
             }
         }
 
+        /* --- 2. Only run for tagged builds (v1.x.x etc.) --- */
         stage('Verify Git Tag') {
             steps {
                 script {
-                    // Make sure tags are available in this workspace
-                    bat 'git fetch --tags'
+                    // Make sure we have all tags
+                    bat 'git fetch --tags --force'
 
-                    // First check if this commit has an exact tag
-                    int status = bat(
-                        script: 'git describe --tags --exact-match 1>tag.txt 2>nul',
-                        returnStatus: true
-                    )
+                    // Try to get tag for current commit; if none, echo NOT_TAGGED
+                    def tagCheck = bat(
+                        script: 'git describe --tags --exact-match HEAD 2>NUL || echo NOT_TAGGED',
+                        returnStdout: true
+                    ).trim()
 
-                    if (status != 0) {
-                        error "Not a tagged build. CI/CD runs only for tagged releases."
+                    if (tagCheck == 'NOT_TAGGED' || !tagCheck.startsWith("v")) {
+                        error "❌ Not a tagged build. CI/CD runs only on tagged releases."
                     }
 
-                    // Read the tag value from the file created above
-                    def tagValue = readFile('tag.txt').trim()
-                    env.RELEASE_TAG = tagValue
-
-                    echo "Running CI/CD pipeline for release tag: ${env.RELEASE_TAG}"
+                    env.RELEASE_TAG = tagCheck
+                    echo "✔ Running pipeline for release tag: ${env.RELEASE_TAG}"
                 }
             }
         }
 
+        /* --- 3. SonarQube static analysis --- */
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    // Jenkins: Manage Jenkins -> Global Tool Configuration -> SonarScanner (name: SonarScanner)
-                    def scannerHome = tool 'SonarScanner'
-
-                    // Jenkins: Manage Jenkins -> System -> SonarQube servers (name: SonarScanner)
-                    withSonarQubeEnv('SonarScanner') {
+                    def scannerHome = tool 'SonarScanner'      // Jenkins global tool name
+                    withSonarQubeEnv('SonarScanner') {          // Jenkins Sonar server name
                         bat """
                             "${scannerHome}\\bin\\sonar-scanner.bat" ^
                               -Dsonar.projectKey=${SONAR_PROJECT} ^
@@ -60,6 +57,7 @@ pipeline {
             }
         }
 
+        /* --- 4. Build Docker image --- */
         stage('Build Docker Image') {
             steps {
                 script {
@@ -70,23 +68,24 @@ pipeline {
             }
         }
 
+        /* --- 5. Trivy image scan (fail on CRITICAL vulns) --- */
         stage('Trivy Scan') {
             steps {
                 script {
-                    // --exit-code 0 = do not fail build on vulnerabilities (just report)
                     bat """
-                        trivy image --severity HIGH,CRITICAL --exit-code 0 ${DOCKER_IMAGE}:${env.RELEASE_TAG}
+                        trivy image --severity CRITICAL --exit-code 1 ${DOCKER_IMAGE}:${env.RELEASE_TAG}
                     """
                 }
             }
         }
 
+        /* --- 6. Push to DockerHub (using dockerhub-creds) --- */
         stage('Push to DockerHub') {
             steps {
                 script {
                     withCredentials([
                         usernamePassword(
-                            credentialsId: 'dockerhub-creds',   // from your screenshot
+                            credentialsId: 'dockerhub-creds',
                             usernameVariable: 'DOCKER_USER',
                             passwordVariable: 'DOCKER_PASS'
                         )
@@ -94,31 +93,27 @@ pipeline {
                         bat """
                             docker login -u %DOCKER_USER% -p %DOCKER_PASS%
                             docker push ${DOCKER_IMAGE}:${env.RELEASE_TAG}
+                            docker logout
                         """
                     }
                 }
             }
         }
 
+        /* --- 7. Deploy to Minikube --- */
         stage('Deploy to Minikube') {
             steps {
                 script {
                     bat """
-                        minikube status
-
-                        rem Remove old image inside Minikube (ignore error)
-                        minikube image rm ${DOCKER_IMAGE}:${env.RELEASE_TAG} 2>nul || echo No old image
-
-                        rem Load new image into Minikube Docker
+                        rem Load the tagged image into Minikube
                         minikube image load ${DOCKER_IMAGE}:${env.RELEASE_TAG}
 
-                        rem Apply Kubernetes manifests
-                        kubectl apply -n ${KUBE_NAMESPACE} -f k8s-deployment.yaml
-                        kubectl apply -n ${KUBE_NAMESPACE} -f k8s-service.yaml
+                        rem Apply (or create) deployment and service
+                        kubectl apply -f k8s-deployment.yaml
+                        kubectl apply -f k8s-service.yaml
 
-                        rem Show pods and services for confirmation
-                        kubectl get pods -n ${KUBE_NAMESPACE}
-                        kubectl get svc  -n ${KUBE_NAMESPACE}
+                        rem Force deployment to use the correct tagged image
+                        kubectl set image deployment/cust-app cust-app=${DOCKER_IMAGE}:${env.RELEASE_TAG} --record
                     """
                 }
             }
@@ -127,10 +122,10 @@ pipeline {
 
     post {
         success {
-            echo "CI/CD pipeline completed successfully for tag ${env.RELEASE_TAG}."
+            echo "🎉 CI/CD Pipeline SUCCESS — deployed version: ${env.RELEASE_TAG}"
         }
         failure {
-            echo "CI/CD pipeline failed. Please inspect stage logs."
+            echo "❌ CI/CD pipeline FAILED — check stage logs."
         }
     }
 }

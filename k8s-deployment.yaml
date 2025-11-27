@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: cust-app
-          image: rajesh4113/cust-app:latest   # tag will be overridden by imagePullPolicy: Never + loaded image
-          imagePullPolicy: Never
+          image: rajesh4113/cust-app:latest    # Jenkins will change this to :v1.0.x
+          imagePullPolicy: Never               # use image already loaded into Minikube
           ports:
             - containerPort: 8080

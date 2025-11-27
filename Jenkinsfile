@@ -112,26 +112,27 @@ pipeline {
             }
         }
 
-        /* --- 7. Deploy to Minikube --- */
+        /* --- 7. Deploy to Minikube (using kubectl + shared kubeconfig) --- */
         stage('Deploy to Minikube') {
             steps {
                 script {
                     bat """
-                        echo ==== Minikube status ====
-                        minikube status || minikube start --driver=docker
+                        echo ==== Configure kubeconfig for Jenkins ====
+                        set KUBECONFIG=C:\\ProgramData\\Jenkins\\.kube\\config
 
-                        echo ==== Load image into Minikube ====
-                        minikube image load ${DOCKER_IMAGE}:${env.RELEASE_TAG}
+                        echo ==== Check cluster access ====
+                        kubectl config current-context
+                        kubectl get nodes
 
-                        echo ==== Apply Kubernetes manifests (using minikube kubectl) ====
-                        minikube kubectl -- apply -f k8s-deployment.yaml --validate=false
-                        minikube kubectl -- apply -f k8s-service.yaml --validate=false
+                        echo ==== Apply Kubernetes manifests ====
+                        kubectl apply -f k8s-deployment.yaml --validate=false
+                        kubectl apply -f k8s-service.yaml --validate=false
 
                         echo ==== Update deployment image ====
-                        minikube kubectl -- set image deployment/cust-app cust-app=${DOCKER_IMAGE}:${env.RELEASE_TAG}
+                        kubectl set image deployment/cust-app cust-app=${DOCKER_IMAGE}:${env.RELEASE_TAG}
 
-                        echo ==== Rollout status ====
-                        minikube kubectl -- rollout status deployment/cust-app --timeout=60s
+                        echo ==== Wait for rollout ====
+                        kubectl rollout status deployment/cust-app --timeout=120s
                     """
                 }
             }

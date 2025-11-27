@@ -10,7 +10,7 @@ pipeline {
 
     stages {
 
-        /* --- 1. Checkout from GitHub (done automatically, but keep it) --- */
+        /* --- 1. Checkout from GitHub --- */
         stage('Checkout SCM') {
             steps {
                 checkout scm
@@ -21,17 +21,24 @@ pipeline {
         stage('Verify Git Tag') {
             steps {
                 script {
-                    // Make sure we have all tags
+                    // Make sure we have all remote tags
                     bat 'git fetch --tags --force'
 
-                    // Try to get tag for current commit; if none, echo NOT_TAGGED
-                    def tagCheck = bat(
-                        script: 'git describe --tags --exact-match HEAD 2>NUL || echo NOT_TAGGED',
+                    // Get tag that points at current commit (no failure if no tag)
+                    def tags = bat(
+                        script: 'git tag --points-at HEAD',
                         returnStdout: true
                     ).trim()
 
-                    if (tagCheck == 'NOT_TAGGED' || !tagCheck.startsWith("v")) {
-                        error "❌ Not a tagged build. CI/CD runs only on tagged releases."
+                    if (!tags) {
+                        error "❌ No tag found on this commit. CI/CD runs only on tagged releases."
+                    }
+
+                    // If multiple tags exist, pick the first one
+                    def tagCheck = tags.split()[0]
+
+                    if (!tagCheck.startsWith("v")) {
+                        error "❌ Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.7."
                     }
 
                     env.RELEASE_TAG = tagCheck
@@ -68,7 +75,7 @@ pipeline {
             }
         }
 
-        /* --- 5. Trivy image scan (fail on CRITICAL vulns) --- */
+        /* --- 5. Trivy image scan --- */
         stage('Trivy Scan') {
             steps {
                 script {
@@ -79,7 +86,7 @@ pipeline {
             }
         }
 
-        /* --- 6. Push to DockerHub (using dockerhub-creds) --- */
+        /* --- 6. Push to DockerHub --- */
         stage('Push to DockerHub') {
             steps {
                 script {
@@ -108,11 +115,11 @@ pipeline {
                         rem Load the tagged image into Minikube
                         minikube image load ${DOCKER_IMAGE}:${env.RELEASE_TAG}
 
-                        rem Apply (or create) deployment and service
+                        rem Apply deployment and service YAMLs
                         kubectl apply -f k8s-deployment.yaml
                         kubectl apply -f k8s-service.yaml
 
-                        rem Force deployment to use the correct tagged image
+                        rem Force deployment to use the exact tagged image
                         kubectl set image deployment/cust-app cust-app=${DOCKER_IMAGE}:${env.RELEASE_TAG} --record
                     """
                 }

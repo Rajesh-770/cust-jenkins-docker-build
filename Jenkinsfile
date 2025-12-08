@@ -51,7 +51,8 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
-                    def scannerHome = tool 'SonarScanner'   // Jenkins tool name (Manage Jenkins → Tools)
+                    // Jenkins tool name from: Manage Jenkins → Global Tool Configuration
+                    def scannerHome = tool 'SonarScanner'
 
                     withCredentials([
                         string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')
@@ -62,7 +63,7 @@ pipeline {
                               -Dsonar.projectKey=${SONAR_PROJECT} ^
                               -Dsonar.sources=. ^
                               -Dsonar.projectVersion=${env.RELEASE_TAG} ^
-                              -Dsonar.login=%SONAR_TOKEN%
+                              -Dsonar.token=%SONAR_TOKEN%
                         """
                     }
                 }

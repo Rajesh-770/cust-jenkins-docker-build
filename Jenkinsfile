@@ -17,34 +17,16 @@ pipeline {
             }
         }
 
-        /* --- 2. Tag / version handling --- */
+       /* --- 2. Only run for tagged builds (vX.Y.Z etc.) --- */
         stage('Verify Git Tag') {
             steps {
                 script {
-                    // Ensure all tags are available
+                    // Ensure all tags are available (optional)
                     bat 'git fetch --tags --force'
 
-                    // Get ONLY the tag(s) pointing at HEAD (Windows-safe)
-                    def tagOutput = bat(
-                        script: '@echo off && for /f "usebackq delims=" %%i in (`git tag --points-at HEAD`) do @echo %%i',
-                        returnStdout: true
-                    ).trim()
-
-                    if (!tagOutput) {
-                        // no tag -> use a dev-style version
-                        env.RELEASE_TAG = "dev-${env.BUILD_NUMBER}"
-                        echo "No git tag found, using fallback release tag: ${env.RELEASE_TAG}"
-                    } else {
-                        // If multiple tags, pick the first one
-                        def tagCheck = tagOutput.split()[0]
-
-                        if (!tagCheck.startsWith("v")) {
-                            error "Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.12."
-                        }
-
-                        env.RELEASE_TAG = tagCheck
-                        echo "Running pipeline for release tag: ${env.RELEASE_TAG}"
-                    }
+                    // SIMPLE: always use dev-<build-number> for now
+                    env.RELEASE_TAG = "dev-${env.BUILD_NUMBER}"
+                    echo "Using release tag: ${env.RELEASE_TAG}"
                 }
             }
         }

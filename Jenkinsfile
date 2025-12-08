@@ -17,7 +17,7 @@ pipeline {
             }
         }
 
-        /* --- 2. Only run for tagged builds (v1.x.x etc.) --- */
+        /* --- 2. Only run for tagged builds (vX.Y.Z etc.) --- */
         stage('Verify Git Tag') {
             steps {
                 script {

@@ -5,7 +5,7 @@ pipeline {
     environment {
         DOCKER_IMAGE  = "rajesh4113/cust-app"
         SONAR_PROJECT = "cust-flask"      // must match SonarQube project key
-        // RELEASE_TAG will be set dynamically from git tag
+        // RELEASE_TAG will be set dynamically from git tag or fallback
     }
 
     stages {
@@ -17,7 +17,7 @@ pipeline {
             }
         }
 
-        /* --- 2. Only run for tagged builds (vX.Y.Z etc.) --- */
+        /* --- 2. Tag / version handling --- */
         stage('Verify Git Tag') {
             steps {
                 script {
@@ -31,18 +31,20 @@ pipeline {
                     ).trim()
 
                     if (!tagOutput) {
-                        error "No tag found on this commit. CI/CD runs only on tagged releases."
+                        // no tag -> use a dev-style version
+                        env.RELEASE_TAG = "dev-${env.BUILD_NUMBER}"
+                        echo "No git tag found, using fallback release tag: ${env.RELEASE_TAG}"
+                    } else {
+                        // If multiple tags, pick the first one
+                        def tagCheck = tagOutput.split()[0]
+
+                        if (!tagCheck.startsWith("v")) {
+                            error "Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.12."
+                        }
+
+                        env.RELEASE_TAG = tagCheck
+                        echo "Running pipeline for release tag: ${env.RELEASE_TAG}"
                     }
-
-                    // If multiple tags, pick the first one
-                    def tagCheck = tagOutput.split()[0]
-
-                    if (!tagCheck.startsWith("v")) {
-                        error "Tag '${tagCheck}' does not start with 'v'. Use tags like v1.0.12."
-                    }
-
-                    env.RELEASE_TAG = tagCheck
-                    echo "Running pipeline for release tag: ${env.RELEASE_TAG}"
                 }
             }
         }

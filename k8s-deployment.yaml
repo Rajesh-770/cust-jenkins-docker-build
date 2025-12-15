@@ -13,7 +13,8 @@ spec:
         app: cust-app
     spec:
       containers:
-      - name: cust-app   # must match Jenkins set-image target
-        image: rajesh4113/cust-app:latest
+      - name: cust-app
+        image: 423014875134.dkr.ecr.ap-south-1.amazonaws.com/cust-jenkins-docker-build:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 5000

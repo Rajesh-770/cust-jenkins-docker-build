@@ -1,123 +1,113 @@
 pipeline {
-
     agent any
 
     environment {
-        DOCKER_IMAGE  = "rajesh4113/cust-app"
-        SONAR_PROJECT = "cust-flask"      // must match SonarQube project key
-        // RELEASE_TAG will be set dynamically from git tag or fallback
+        AWS_REGION     = "ap-south-1"
+        AWS_ACCOUNT_ID = "423014875134"
+        ECR_REPO       = "cust-jenkins-docker-build"
+        ECR_IMAGE      = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+
+        SONAR_PROJECT  = "cust-flask"
+        MINIKUBE_HOST  = "10.0.13.114"
     }
 
     stages {
 
-        /* --- 1. Checkout from GitHub --- */
+        /* 1️⃣ Checkout */
         stage('Checkout SCM') {
             steps {
                 checkout scm
             }
         }
 
-       /* --- 2. Only run for tagged builds (vX.Y.Z etc.) --- */
-        stage('Verify Git Tag') {
+        /* 2️⃣ Versioning */
+        stage('Set Release Tag') {
             steps {
                 script {
-                    // Ensure all tags are available (optional)
-                    bat 'git fetch --tags --force'
-
-                    // SIMPLE: always use dev-<build-number> for now
-                    env.RELEASE_TAG = "dev-${env.BUILD_NUMBER}"
-                    echo "Using release tag: ${env.RELEASE_TAG}"
+                    env.RELEASE_TAG = "dev-${BUILD_NUMBER}"
+                    echo "Release tag: ${RELEASE_TAG}"
                 }
             }
         }
 
-        /* --- 3. SonarQube static analysis --- */
+        /* 3️⃣ SonarQube Scan */
         stage('SonarQube Analysis') {
             steps {
-                script {
-                    // Jenkins tool name from: Manage Jenkins → Global Tool Configuration
-                    def scannerHome = tool 'SonarScanner'
-
-                    withCredentials([
-                        string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')
-                    ]) {
-                        bat """
-                            "${scannerHome}\\bin\\sonar-scanner.bat" ^
-                              -Dsonar.host.url=http://localhost:9000 ^
-                              -Dsonar.projectKey=${SONAR_PROJECT} ^
-                              -Dsonar.sources=. ^
-                              -Dsonar.projectVersion=${env.RELEASE_TAG} ^
-                              -Dsonar.token=%SONAR_TOKEN%
-                        """
-                    }
+                withCredentials([
+                    string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')
+                ]) {
+                    sh """
+                      sonar-scanner \
+                        -Dsonar.projectKey=${SONAR_PROJECT} \
+                        -Dsonar.sources=. \
+                        -Dsonar.projectVersion=${RELEASE_TAG} \
+                        -Dsonar.host.url=http://localhost:9000 \
+                        -Dsonar.login=${SONAR_TOKEN}
+                    """
                 }
             }
         }
 
-        /* --- 4. Build Docker image --- */
+        /* 4️⃣ Quality Gate (REAL CI/CD) */
+        stage('Sonar Quality Gate') {
+            steps {
+                timeout(time: 2, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        /* 5️⃣ Login to ECR (IAM Role) */
+        stage('Login to ECR') {
+            steps {
+                sh """
+                  aws ecr get-login-password --region ${AWS_REGION} |
+                  docker login --username AWS --password-stdin \
+                  ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                """
+            }
+        }
+
+        /* 6️⃣ Build Docker Image */
         stage('Build Docker Image') {
             steps {
-                script {
-                    bat """
-                        docker build -t ${DOCKER_IMAGE}:${env.RELEASE_TAG} .
-                    """
-                }
+                sh """
+                  docker build -t ${ECR_IMAGE}:${RELEASE_TAG} .
+                """
             }
         }
 
-        /* --- 5. Trivy image scan --- */
+        /* 7️⃣ Trivy Scan */
         stage('Trivy Scan') {
             steps {
-                script {
-                    bat """
-                        trivy image --severity CRITICAL --exit-code 1 ${DOCKER_IMAGE}:${env.RELEASE_TAG}
-                    """
-                }
+                sh """
+                  trivy image --severity CRITICAL --exit-code 1 \
+                  ${ECR_IMAGE}:${RELEASE_TAG}
+                """
             }
         }
 
-        /* --- 6. Push image to DockerHub --- */
-        stage('Push to DockerHub') {
+        /* 8️⃣ Push to ECR */
+        stage('Push Image to ECR') {
             steps {
-                script {
-                    withCredentials([
-                        usernamePassword(
-                            credentialsId: 'dockerhub-creds',
-                            usernameVariable: 'DOCKER_USER',
-                            passwordVariable: 'DOCKER_PASS'
-                        )
-                    ]) {
-                        bat """
-                            docker login -u %DOCKER_USER% -p %DOCKER_PASS%
-                            docker push ${DOCKER_IMAGE}:${env.RELEASE_TAG}
-                            docker logout
-                        """
-                    }
-                }
+                sh """
+                  docker push ${ECR_IMAGE}:${RELEASE_TAG}
+                """
             }
         }
 
-        /* --- 7. Deploy to Minikube (using kubectl + shared kubeconfig) --- */
+        /* 9️⃣ Deploy to Minikube (REMOTE EC2) */
         stage('Deploy to Minikube') {
             steps {
-                script {
-                    bat """
-                        echo ==== Configure kubeconfig for Jenkins ====
-                        set KUBECONFIG=C:\\ProgramData\\Jenkins\\.kube\\config
-
-                        echo ==== Check cluster access ====
-                        kubectl config current-context
-                        kubectl get nodes
-
-                        echo ==== Apply Kubernetes manifests ====
-                        kubectl apply -f k8s-deployment.yaml --validate=false
-                        kubectl apply -f k8s-service.yaml --validate=false
-
-                        echo ==== Update deployment image ====
-                        kubectl set image deployment/cust-app cust-app=${DOCKER_IMAGE}:${env.RELEASE_TAG}
-
-                        echo ==== Wait for rollout ====
-                        kubectl rollout status deployment/cust-app --timeout=120s
+                sshagent(['minikube-ssh-key']) {
+                    sh """
+                      ssh -o StrictHostKeyChecking=no ubuntu@${MINIKUBE_HOST} '
+                        kubectl apply -f k8s-deployment.yaml
+                        kubectl apply -f k8s-service.yaml
+                        kubectl set image deployment/cust-app \
+                          cust-app=${ECR_IMAGE}:${RELEASE_TAG}
+                        kubectl rollout status deployment/cust-app
+                      '
                     """
                 }
             }
@@ -126,10 +116,10 @@ pipeline {
 
     post {
         success {
-            echo "CI/CD pipeline SUCCESS — deployed version: ${env.RELEASE_TAG}"
+            echo "✅ CI/CD SUCCESS — ${RELEASE_TAG} deployed"
         }
         failure {
-            echo "CI/CD pipeline FAILED — check stage logs."
+            echo "❌ CI/CD FAILED — check logs"
         }
     }
 }

@@ -12,11 +12,9 @@ spec:
       labels:
         app: cust-app
     spec:
-      imagePullSecrets:
-        - name: ecr-secret
       containers:
         - name: cust-app
-          image: 423014875134.dkr.ecr.ap-south-1.amazonaws.com/cust-jenkins-docker-build:latest
-          imagePullPolicy: Always
+          image: cust-flask:IMAGE_TAG
+          imagePullPolicy: Never
           ports:
             - containerPort: 5000

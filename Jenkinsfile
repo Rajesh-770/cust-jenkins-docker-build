@@ -2,10 +2,7 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = "ap-south-1"
-        ECR_REGISTRY = "423014875134.dkr.ecr.ap-south-1.amazonaws.com"
-        ECR_REPO = "cust-jenkins-docker-build"
-        IMAGE_TAG = "latest"
+        APP_NAME = "cust-flask"
     }
 
     stages {
@@ -16,28 +13,29 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Verify Git Tag') {
             steps {
-                sh """
-                docker build -t ${ECR_REPO}:${IMAGE_TAG} .
-                """
+                script {
+                    if (!env.GIT_TAG_NAME) {
+                        error "Pipeline must be triggered by a Git tag"
+                    }
+                    echo "Running CI/CD for tag: ${env.GIT_TAG_NAME}"
+                }
             }
         }
 
-        stage('Login to ECR') {
+        stage('Use Minikube Docker') {
             steps {
-                sh """
-                aws ecr get-login-password --region ${AWS_REGION} \
-                | docker login --username AWS --password-stdin ${ECR_REGISTRY}
-                """
+                sh '''
+                eval $(minikube docker-env)
+                '''
             }
         }
 
-        stage('Tag & Push Image to ECR') {
+        stage('Build Docker Image (Local)') {
             steps {
                 sh """
-                docker tag ${ECR_REPO}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
-                docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
+                docker build -t ${APP_NAME}:${env.GIT_TAG_NAME} .
                 """
             }
         }
@@ -45,6 +43,7 @@ pipeline {
         stage('Deploy to Minikube') {
             steps {
                 sh """
+                sed -i 's/IMAGE_TAG/${env.GIT_TAG_NAME}/g' k8s-deployment.yaml
                 kubectl apply -f k8s-deployment.yaml
                 kubectl apply -f k8s-service.yaml
                 """
@@ -54,7 +53,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ CI/CD SUCCESS — App Deployed to Minikube"
+            echo "✅ CI/CD SUCCESS — App deployed to Minikube with tag ${env.GIT_TAG_NAME}"
         }
         failure {
             echo "❌ CI/CD FAILED — Check logs"

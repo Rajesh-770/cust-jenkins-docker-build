@@ -3,6 +3,7 @@ pipeline {
 
     environment {
         APP_NAME = "cust-flask"
+        IMAGE_TAG = "latest"
     }
 
     stages {
@@ -13,50 +14,38 @@ pipeline {
             }
         }
 
-        stage('Verify Git Tag') {
-            steps {
-                script {
-                    if (!env.GIT_TAG_NAME) {
-                        error "Pipeline must be triggered by a Git tag"
-                    }
-                    echo "Running CI/CD for tag: ${env.GIT_TAG_NAME}"
-                }
-            }
-        }
-
         stage('Use Minikube Docker') {
             steps {
-                sh '''
-                eval $(minikube docker-env)
+                powershell '''
+                & minikube docker-env --shell powershell | Invoke-Expression
                 '''
             }
         }
 
-        stage('Build Docker Image (Local)') {
+        stage('Build Docker Image') {
             steps {
-                sh """
-                docker build -t ${APP_NAME}:${env.GIT_TAG_NAME} .
-                """
+                powershell '''
+                docker build -t cust-flask:latest .
+                '''
             }
         }
 
         stage('Deploy to Minikube') {
             steps {
-                sh """
-                sed -i 's/IMAGE_TAG/${env.GIT_TAG_NAME}/g' k8s-deployment.yaml
+                powershell '''
                 kubectl apply -f k8s-deployment.yaml
                 kubectl apply -f k8s-service.yaml
-                """
+                '''
             }
         }
     }
 
     post {
         success {
-            echo "✅ CI/CD SUCCESS — App deployed to Minikube with tag ${env.GIT_TAG_NAME}"
+            echo "CI/CD SUCCESS — App deployed to Minikube"
         }
         failure {
-            echo "❌ CI/CD FAILED — Check logs"
+            echo "CI/CD FAILED — Check logs"
         }
     }
 }
